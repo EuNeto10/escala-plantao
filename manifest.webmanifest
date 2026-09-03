@@ -1,0 +1,12 @@
+{
+  "name": "Escala de Plantão",
+  "short_name": "Escala Plantão",
+  "description": "Pesquisa de escalas de plantão por data e por nome.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f3f4f6",
+  "theme_color": "#111827",
+  "lang": "pt-BR",
+  "orientation": "portrait",
+  "icons": []
+}

@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Escala Plantão">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Escala de Plantão</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f3f4f6;color:#111827}
+header{background:#111827;color:white;padding:18px 16px;position:sticky;top:0;z-index:5}
+h1{font-size:21px;margin:0 0 4px}.sub{font-size:12px;opacity:.8}
+main{max-width:1000px;margin:auto;padding:12px}
+nav{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:10px}
+nav button,.btn{border:0;border-radius:10px;padding:11px 8px;background:white;color:#111827;font-weight:700}
+nav button.active{background:#111827;color:white}
+.card{background:white;border-radius:14px;padding:14px;margin:10px 0;box-shadow:0 1px 5px #0001}
+label{display:block;font-size:13px;font-weight:700;margin-bottom:5px}
+input[type=date],input[type=text],input[type=file]{width:100%;padding:12px;border:1px solid #d1d5db;border-radius:10px;font-size:16px;background:white}
+.btn{background:#111827;color:white;margin-top:10px;width:100%}.btn.secondary{background:#e5e7eb;color:#111827}
+.hidden{display:none!important}.msg{padding:10px;border-radius:10px;background:#eef2ff;margin:8px 0;font-size:13px}
+.team{margin:12px 0}.team h3{margin:0 0 8px;font-size:16px}
+.tablewrap{overflow:auto;border:1px solid #e5e7eb;border-radius:10px}
+table{border-collapse:collapse;width:100%;min-width:720px;font-size:13px}th,td{padding:8px;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}th{background:#f9fafb}
+.person{padding:10px 0;border-bottom:1px solid #e5e7eb}.person:last-child{border-bottom:0}
+.person b{display:block}.meta{font-size:12px;color:#4b5563;margin-top:3px}
+.small{font-size:12px;color:#6b7280}.pill{display:inline-block;padding:3px 7px;border-radius:999px;background:#e5e7eb;font-size:11px;font-weight:700}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+@media(max-width:600px){.row{grid-template-columns:1fr}nav{position:sticky;top:74px;z-index:4}.card{padding:12px}}
+</style>
+</head>
+<body>
+<header><h1>Escala de Plantão</h1><div class="sub">Pesquisa por data ou por nome</div><button id="installBtn" class="btn" style="display:none;margin-top:10px;background:#fff;color:#111827" onclick="installApp()">📲 Instalar aplicativo</button></header>
+<main>
+<nav>
+<button id="tabDate" class="active" onclick="showTab('date')">📅 Por data</button>
+<button id="tabName" onclick="showTab('name')">🔎 Por nome</button>
+<button id="tabImport" onclick="showTab('import')">📄 Importar PDF</button>
+</nav>
+
+<section id="dateTab">
+<div class="card">
+<label for="dateInput">Escolha a data</label>
+<input id="dateInput" type="date">
+<button class="btn" onclick="searchDate()">Pesquisar</button>
+</div>
+<div id="dateResults"></div>
+</section>
+
+<section id="nameTab" class="hidden">
+<div class="card">
+<label for="nameInput">Nome (pode digitar só parte)</label>
+<input id="nameInput" type="text" placeholder="Ex.: Antônio, Maria, Silva...">
+<button class="btn" onclick="searchName()">Pesquisar</button>
+</div>
+<div id="nameResults"></div>
+</section>
+
+<section id="importTab" class="hidden">
+<div class="card">
+<b>Adicionar a escala do mês</b>
+<p class="small">Selecione no celular o PDF da nova publicação. A escala importada fica salva neste navegador. O arquivo atual será substituído se você importar outro PDF.</p>
+<input id="pdfInput" type="file" accept="application/pdf">
+<button class="btn" onclick="importPDF()">Importar PDF</button>
+<div id="importMsg" class="msg">Base atual: carregando...</div>
+</div>
+<div class="card">
+<b>Importante</b>
+<p class="small">Esta versão foi feita para funcionar diretamente no smartphone pelo navegador, sem Python, Streamlit ou SQLite.</p>
+<button class="btn secondary" onclick="clearData()">Apagar dados salvos</button>
+</div>
+</section>
+</main>
+
+
+<script type="module">
+const MONTHS={janeiro:1,fevereiro:2,marco:3,"março":3,abril:4,maio:5,junho:6,julho:7,agosto:8,setembro:9,outubro:10,novembro:11,dezembro:12};
+const CARGOS=/DELEGADO|ESCRIVÃO|ESCRIVAO|COMISSÁRIO|COMISSARIO|AGENTE/i;
+let records=[];
+
+const $=id=>document.getElementById(id);
+function norm(s){return (s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toUpperCase()}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function save(){localStorage.setItem('escalaPlantaoDados',JSON.stringify(records))}
+function load(){
+  const saved=localStorage.getItem('escalaPlantaoDados');
+  if(saved){try{records=JSON.parse(saved);updateMsg();return}catch{}}
+  fetch('dados_iniciais.json').then(r=>r.json()).then(d=>{records=d;save();updateMsg()}).catch(()=>{$('importMsg').textContent='Nenhuma base carregada. Importe um PDF.'});
+}
+function updateMsg(){ $('importMsg').textContent=`Base carregada: ${records.length} registros. Os dados ficam salvos neste navegador.`}
+window.showTab=function(t){
+ ['date','name','import'].forEach(x=>$(x+'Tab').classList.toggle('hidden',x!==t));
+ ['tabDate','tabName','tabImport'].forEach(x=>$(x).classList.remove('active'));
+ $('tab'+t[0].toUpperCase()+t.slice(1)).classList.add('active');
+}
+window.searchDate=function(){
+ const d=$('dateInput').value;
+ if(!d){$('dateResults').innerHTML='<div class="card">Escolha uma data.</div>';return}
+ const rows=records.filter(r=>r.data===d).sort((a,b)=>a.turno.localeCompare(b.turno)||a.equipe.localeCompare(b.equipe)||a.ordem-b.ordem);
+ if(!rows.length){$('dateResults').innerHTML='<div class="card">Nenhuma escala encontrada para esta data.</div>';return}
+ const groups={}; rows.forEach(r=>{const k=r.turno+'|'+r.equipe;(groups[k]??=[]).push(r)});
+ let out=`<div class="card"><b>${new Date(d+'T12:00:00').toLocaleDateString('pt-BR')}</b><div class="small">${rows.length} registros</div></div>`;
+ for(const [k,rs] of Object.entries(groups)){
+   const [turno,equipe]=k.split('|');
+   out+=`<div class="card team"><h3>${esc(equipe)} <span class="pill">${esc(turno)}</span></h3><div class="tablewrap"><table><thead><tr><th>#</th><th>NOME</th><th>CARGO</th><th>MATRÍCULA</th><th>LOTAÇÃO</th><th>TELEFONE</th></tr></thead><tbody>`;
+   rs.forEach(r=>out+=`<tr><td>${r.ordem}</td><td>${esc(r.nome)}</td><td>${esc(r.cargo)}</td><td>${esc(r.matricula)}</td><td>${esc(r.lotacao)}</td><td>${esc(r.telefone)}</td></tr>`);
+   out+='</tbody></table></div></div>';
+ }
+ $('dateResults').innerHTML=out;
+}
+window.searchName=function(){
+ const q=norm($('nameInput').value);
+ if(!q){$('nameResults').innerHTML='<div class="card">Digite um nome ou parte dele.</div>';return}
+ const rows=records.filter(r=>norm(r.nome).includes(q)).sort((a,b)=>a.data.localeCompare(b.data)||a.turno.localeCompare(b.turno)||a.equipe.localeCompare(b.equipe));
+ if(!rows.length){$('nameResults').innerHTML='<div class="card">Nenhuma ocorrência encontrada.</div>';return}
+ let out=`<div class="card"><b>${rows.length} ocorrência(s)</b></div>`;
+ rows.forEach(r=>out+=`<div class="card person"><b>${esc(r.nome)}</b><div class="meta">📅 ${new Date(r.data+'T12:00:00').toLocaleDateString('pt-BR')} · ${esc(r.turno)} · ${esc(r.equipe)}</div><div class="meta">${esc(r.cargo)} · Matrícula: ${esc(r.matricula)} · Lotação: ${esc(r.lotacao)} · Tel.: ${esc(r.telefone)}</div></div>`);
+ $('nameResults').innerHTML=out;
+}
+
+async function extractTextFromPDF(file){
+  const pdfjs=await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs');
+  pdfjs.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+  const buf=await file.arrayBuffer(), doc=await pdfjs.getDocument({data:buf}).promise;
+  let text='';
+  for(let i=1;i<=doc.numPages;i++){
+    const page=await doc.getPage(i), content=await page.getTextContent();
+    text+=content.items.map(x=>x.str).join(' ')+'\\n';
+  }
+  return text;
+}
+function parseText(text,filename){
+  const lines=text.split(/\\n/).map(x=>x.replace(/\\s+/g,' ').trim()).filter(Boolean);
+  const dateRe=/^(janeiro|fevereiro|marco|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\\s+(\\d{4})\\s+(\\d{1,2})\\s+(segunda-feira|terça-feira|terca-feira|quarta-feira|quinta-feira|sexta-feira|sábado|sabado|domingo)(?:\\s+(.*))?$/i;
+  const teamRe=/^EQUIPE\\s+(\\d+)\\s+(DIA|NOITE)$/i;
+  const rowRe=/^(\\d+)\\s+(.*?)\\s+(DELEGADO|ESCRIVÃO|ESCRIVAO|COMISSÁRIO|COMISSARIO|AGENTE)\\s*(\\S+)\\s+(.+?)(?:\\s+(\\d{2}[-.\\s]?\\d{4,5}[-.\\s]?\\d{4}))?$/i;
+  let date='',weekday='',turno='',equipe='',out=[];
+  for(const line of lines){
+    let m=line.match(dateRe);
+    if(m){const month=MONTHS[m[1].toLowerCase()];date=`${m[2]}-${String(month).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;weekday=m[4];const s=(m[5]||'').toUpperCase();turno=s.includes('DIURNO')&&!s.includes('NOTURNO')?'DIA':s.includes('NOTURNO')&&!s.includes('DIURNO')?'NOITE':'';equipe='';continue}
+    m=line.match(teamRe); if(m){equipe=`EQUIPE ${m[1]}`;turno=m[2].toUpperCase();continue}
+    if(!date||!equipe) continue;
+    m=line.match(rowRe); if(m){
+      out.push({data:date,dia_semana:weekday,turno,equipe,ordem:+m[1],nome:m[2].trim(),cargo:m[3].trim(),matricula:m[4].trim(),lotacao:m[5].trim(),telefone:(m[6]||'').trim(),arquivo:filename});
+    }
+  }
+  const seen=new Set(); return out.filter(r=>{const k=JSON.stringify(r);if(seen.has(k))return false;seen.add(k);return true});
+}
+window.importPDF=async function(){
+ const f=$('pdfInput').files[0];
+ if(!f){$('importMsg').textContent='Selecione um arquivo PDF primeiro.';return}
+ $('importMsg').textContent='Lendo o PDF… aguarde.';
+ try{
+   const text=await extractTextFromPDF(f);
+   const parsed=parseText(text,f.name);
+   if(!parsed.length) throw new Error('Não consegui identificar as tabelas deste PDF.');
+   records=parsed;save();updateMsg();
+   alert(`Importação concluída: ${parsed.length} registros.`);
+ }catch(e){$('importMsg').textContent='Erro ao importar: '+e.message+' Se o PDF tiver estrutura diferente, envie-o para eu adaptar o leitor.'}
+}
+window.clearData=function(){
+ if(confirm('Apagar a escala salva neste navegador?')){localStorage.removeItem('escalaPlantaoDados');records=[];location.reload()}
+}
+load();
+</script>
+
+<script>
+let deferredPrompt=null;
+window.addEventListener('beforeinstallprompt',e=>{
+  e.preventDefault(); deferredPrompt=e;
+  const b=document.getElementById('installBtn'); if(b)b.style.display='block';
+});
+window.installApp=async function(){
+  if(!deferredPrompt){alert('Se o botão não aparecer, abra o menu do Chrome e escolha "Adicionar à tela inicial" ou "Instalar aplicativo".');return}
+  deferredPrompt.prompt();
+  await deferredPrompt.userChoice;
+  deferredPrompt=null;
+  document.getElementById('installBtn').style.display='none';
+};
+if('serviceWorker' in navigator && location.protocol!=='file:'){
+  window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+</script>
+</body>
+</html>
