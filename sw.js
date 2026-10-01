@@ -1,5 +1,5 @@
 
-const CACHE='escala-plantao-v2';
+const CACHE='escala-plantao-v3';
 const ASSETS=['./','./index.html','./dados_iniciais.json','./manifest.webmanifest'];
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)));

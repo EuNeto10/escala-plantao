@@ -137,27 +137,53 @@ async function extractTextFromPDF(file){
   const pdfjs=await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs');
   pdfjs.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
   const buf=await file.arrayBuffer(), doc=await pdfjs.getDocument({data:buf}).promise;
-  let text='';
+  const pages=[];
   for(let i=1;i<=doc.numPages;i++){
     const page=await doc.getPage(i), content=await page.getTextContent();
-    text+=content.items.map(x=>x.str).join(' ')+'\\n';
+    const items=content.items.map(x=>({str:(x.str||'').trim(),x:x.transform?.[4]??0,y:x.transform?.[5]??0})).filter(x=>x.str);
+    items.sort((a,b)=>b.y-a.y || a.x-b.x);
+    const rows=[];
+    for(const item of items){
+      let row=rows.find(r=>Math.abs(r.y-item.y)<3);
+      if(!row){row={y:item.y,items:[]};rows.push(row)}
+      row.items.push(item);
+    }
+    rows.sort((a,b)=>b.y-a.y);
+    pages.push(rows.map(r=>r.items.sort((a,b)=>a.x-b.x).map(x=>x.str).join(' ')).join('\n'));
   }
-  return text;
+  return pages.join('\n');
 }
 function parseText(text,filename){
-  const lines=text.split(/\\n/).map(x=>x.replace(/\\s+/g,' ').trim()).filter(Boolean);
-  const dateRe=/^(janeiro|fevereiro|marco|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\\s+(\\d{4})\\s+(\\d{1,2})\\s+(segunda-feira|terça-feira|terca-feira|quarta-feira|quinta-feira|sexta-feira|sábado|sabado|domingo)(?:\\s+(.*))?$/i;
-  const teamRe=/^EQUIPE\\s+(\\d+)\\s+(DIA|NOITE)$/i;
-  const rowRe=/^(\\d+)\\s+(.*?)\\s+(DELEGADO|ESCRIVÃO|ESCRIVAO|COMISSÁRIO|COMISSARIO|AGENTE)\\s*(\\S+)\\s+(.+?)(?:\\s+(\\d{2}[-.\\s]?\\d{4,5}[-.\\s]?\\d{4}))?$/i;
+  const lines=text.split(/\n/).map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean);
+  const dateRe=/^(janeiro|fevereiro|marco|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+(\d{4})\s+(\d{1,2})\s+(segunda-feira|terça-feira|terca-feira|quarta-feira|quinta-feira|sexta-feira|sábado|sabado|domingo)(?:\s+(.*))?$/i;
+  const teamRe=/^EQUIPE\s+(\d+)\s+(DIA|NOITE)$/i;
+  const rowStartRe=/^(\d+)\s+(.+?)\s+(DELEGADO|ESCRIVÃO|ESCRIVAO|COMISSÁRIO|COMISSARIO|AGENTE)\s+(\S+)\s+(.+)$/i;
+  const bareRowRe=/^(\d+)\s+(DELEGADO|ESCRIVÃO|ESCRIVAO|COMISSÁRIO|COMISSARIO|AGENTE)\s+(\S+)\s+(.+)$/i;
+  const isPhone=s=>{const t=(s||'').replace(/\s+/g,'');return t==='SEMDPC'||/^(?:\(\d{2}\)|\d{2})[-.]?\d{4,5}[-.]?\d{4}$/.test(t)};
   let date='',weekday='',turno='',equipe='',out=[];
-  for(const line of lines){
+  for(let i=0;i<lines.length;i++){
+    const line=lines[i];
     let m=line.match(dateRe);
     if(m){const month=MONTHS[m[1].toLowerCase()];date=`${m[2]}-${String(month).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;weekday=m[4];const s=(m[5]||'').toUpperCase();turno=s.includes('DIURNO')&&!s.includes('NOTURNO')?'DIA':s.includes('NOTURNO')&&!s.includes('DIURNO')?'NOITE':'';equipe='';continue}
     m=line.match(teamRe); if(m){equipe=`EQUIPE ${m[1]}`;turno=m[2].toUpperCase();continue}
     if(!date||!equipe) continue;
-    m=line.match(rowRe); if(m){
-      out.push({data:date,dia_semana:weekday,turno,equipe,ordem:+m[1],nome:m[2].trim(),cargo:m[3].trim(),matricula:m[4].trim(),lotacao:m[5].trim(),telefone:(m[6]||'').trim(),arquivo:filename});
+    m=line.match(rowStartRe);
+    let ordem,nome,cargo,matricula,rest,telefone='',nameFromPrev=false;
+    if(m){ ordem=+m[1]; nome=m[2].trim(); cargo=m[3].trim(); matricula=m[4].trim(); rest=m[5].trim(); }
+    else {
+      const b=line.match(bareRowRe); if(!b) continue;
+      ordem=+b[1]; cargo=b[2].trim(); matricula=b[3].trim(); rest=b[4].trim();
+      const prev=(i>0?lines[i-1]:'').trim();
+      if(!prev || /^(EQUIPE|OPERACIONAL|ESCALA|NOME)\b/i.test(prev) || /^\d+\s+/.test(prev)) continue;
+      nome=prev; nameFromPrev=true;
     }
+    if(!nameFromPrev && i>0 && /^\d+\s+/.test(line) && !/^\d+\s+/.test(lines[i-1]) && !/^EQUIPE\s+/i.test(lines[i-1]) && lines[i-1].length>=30 && !/^(OPERACIONAL|ESCALA|NOME)\b/i.test(lines[i-1])) nome=(lines[i-1]+' '+nome).trim();
+    const parts=rest.split(/\s+/).filter(Boolean);
+    if(parts.length>=2 && isPhone(parts.slice(-2).join(' '))) {telefone=parts.slice(-2).join(' ');rest=parts.slice(0,-2).join(' ')}
+    else if(parts.length && isPhone(parts[parts.length-1])) {telefone=parts.pop();rest=parts.join(' ')}
+    else if(parts.slice(-2).join(' ')==='SEM DPC') {telefone='SEM DPC';rest=parts.join(' ')}
+    if(i+1<lines.length && !/^\d+\s+/.test(lines[i+1]) && !/^EQUIPE\s+/i.test(lines[i+1]) && !dateRe.test(lines[i+1]) && !/^(OPERACIONAL|ESCALA|NOME)\b/i.test(lines[i+1]) && !isPhone(lines[i+1]) && lines[i+1].length<30){nome=(nome+' '+lines[i+1]).trim();i++}
+    out.push({data:date,dia_semana:weekday,turno,equipe,ordem,nome,cargo,matricula,lotacao:rest.trim(),telefone,arquivo:filename});
   }
   const seen=new Set(); return out.filter(r=>{const k=JSON.stringify(r);if(seen.has(k))return false;seen.add(k);return true});
 }
