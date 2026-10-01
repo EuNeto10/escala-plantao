@@ -154,17 +154,48 @@ async function extractTextFromPDF(file){
   return pages.join('\n');
 }
 function parseText(text,filename){
-  const lines=text.split(/\n/).map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean);
-  const dateRe=/^(janeiro|fevereiro|marco|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+(\d{4})\s+(\d{1,2})\s+(segunda-feira|terça-feira|terca-feira|quarta-feira|quinta-feira|sexta-feira|sábado|sabado|domingo)(?:\s+(.*))?$/i;
+  const raw=text.split(/\n/).map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean);
+  const lines=raw;
+  const dateHeadRe=/^(janeiro|fevereiro|marco|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+(\d{4})(?:\s+(\d{1,2}))?(?:\s+(segunda-feira|terça-feira|terca-feira|quarta-feira|quinta-feira|sexta-feira|sábado|sabado|domingo))?(?:\s+(.*))?$/i;
+  const weekdayRe=/^(segunda-feira|terça-feira|terca-feira|quarta-feira|quinta-feira|sexta-feira|sábado|sabado|domingo)$/i;
+  const monthYearRe=/^(janeiro|fevereiro|marco|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+(\d{4})$/i;
   const teamRe=/^EQUIPE\s+(\d+)\s+(DIA|NOITE)$/i;
   const rowStartRe=/^(\d+)\s+(.+?)\s+(DELEGADO|ESCRIVÃO|ESCRIVAO|COMISSÁRIO|COMISSARIO|AGENTE)\s+(\S+)\s+(.+)$/i;
   const bareRowRe=/^(\d+)\s+(DELEGADO|ESCRIVÃO|ESCRIVAO|COMISSÁRIO|COMISSARIO|AGENTE)\s+(\S+)\s+(.+)$/i;
-  const isPhone=s=>{const t=(s||'').replace(/\s+/g,'');return t==='SEMDPC'||/^(?:\(\d{2}\)|\d{2})[-.]?\d{4,5}[-.]?\d{4}$/.test(t)};
+  const isPhone=s=>{const t=(s||'').replace(/\s+/g,'');return t==='SEMDPC'||/^(?:\(\d{2}\)|\d{2})[-.]?\d{4,5}[-.]?\d{4}$/.test(t)||/^\d{2}[-.]\d{4,5}[ -]?\d{4}$/.test(t)};
   let date='',weekday='',turno='',equipe='',out=[];
+  const setHeader=(month,year,day,wd,shift)=>{
+    const n=MONTHS[(month||'').toLowerCase()];
+    if(!n||!year||!day)return false;
+    date=`${year}-${String(n).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    weekday=wd||'';
+    const ss=(shift||'').toUpperCase();
+    turno=ss.includes('DIURNO')&&!ss.includes('NOTURNO')?'DIA':ss.includes('NOTURNO')&&!ss.includes('DIURNO')?'NOITE':'';
+    equipe='';
+    return true;
+  };
   for(let i=0;i<lines.length;i++){
-    const line=lines[i];
-    let m=line.match(dateRe);
-    if(m){const month=MONTHS[m[1].toLowerCase()];date=`${m[2]}-${String(month).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;weekday=m[4];const s=(m[5]||'').toUpperCase();turno=s.includes('DIURNO')&&!s.includes('NOTURNO')?'DIA':s.includes('NOTURNO')&&!s.includes('DIURNO')?'NOITE':'';equipe='';continue}
+    let line=lines[i];
+    let m=line.match(dateHeadRe);
+    if(m && m[3] && m[4]){ setHeader(m[1],m[2],m[3],m[4],m[5]||''); continue; }
+    // PDF.js may place each header fragment on a separate visual line.
+    m=line.match(monthYearRe);
+    if(m){
+      let j=i+1, day='', wd='', shift='';
+      while(j<lines.length && j<i+6){
+        if(!day && /^\d{1,2}$/.test(lines[j])){day=lines[j];j++;continue}
+        if(!wd && weekdayRe.test(lines[j])){wd=lines[j];j++;continue}
+        if(!shift && /^(DIURNO(?:\s*\/\s*NOTURNO)?|NOTURNO)$/i.test(lines[j])){shift=lines[j];j++;continue}
+        if(day&&wd) break;
+        j++;
+      }
+      if(day&&wd){ setHeader(m[1],m[2],day,wd,shift); i=j-1; continue; }
+    }
+    // Also accept a compact header where the date pieces are split but still nearby.
+    if(/^\d{1,2}$/.test(line) && i>=1 && i+2<lines.length){
+      const pm=lines[i-1].match(monthYearRe), wd=lines[i+1].match(weekdayRe);
+      if(pm && wd){ const sh=/^(DIURNO(?:\s*\/\s*NOTURNO)?|NOTURNO)$/i.test(lines[i+2])?lines[i+2]:''; setHeader(pm[1],pm[2],line,wd[1],sh); continue; }
+    }
     m=line.match(teamRe); if(m){equipe=`EQUIPE ${m[1]}`;turno=m[2].toUpperCase();continue}
     if(!date||!equipe) continue;
     m=line.match(rowStartRe);
@@ -174,15 +205,15 @@ function parseText(text,filename){
       const b=line.match(bareRowRe); if(!b) continue;
       ordem=+b[1]; cargo=b[2].trim(); matricula=b[3].trim(); rest=b[4].trim();
       const prev=(i>0?lines[i-1]:'').trim();
-      if(!prev || /^(EQUIPE|OPERACIONAL|ESCALA|NOME)\b/i.test(prev) || /^\d+\s+/.test(prev)) continue;
+      if(!prev || /^(EQUIPE|OPERACIONAL|ESCALA|NOME|CARGO|MATRÍCULA|LOTAÇÃO|TELEFONE)\b/i.test(prev) || /^\d+\s+/.test(prev)) continue;
       nome=prev; nameFromPrev=true;
     }
-    if(!nameFromPrev && i>0 && /^\d+\s+/.test(line) && !/^\d+\s+/.test(lines[i-1]) && !/^EQUIPE\s+/i.test(lines[i-1]) && lines[i-1].length>=30 && !/^(OPERACIONAL|ESCALA|NOME)\b/i.test(lines[i-1])) nome=(lines[i-1]+' '+nome).trim();
+    if(!nameFromPrev && i>0 && /^\d+\s+/.test(line) && !/^\d+\s+/.test(lines[i-1]) && !/^EQUIPE\s+/i.test(lines[i-1]) && lines[i-1].length>=30 && !/^(OPERACIONAL|ESCALA|NOME|CARGO|MATRÍCULA|LOTAÇÃO|TELEFONE)\b/i.test(lines[i-1])) nome=(lines[i-1]+' '+nome).trim();
     const parts=rest.split(/\s+/).filter(Boolean);
     if(parts.length>=2 && isPhone(parts.slice(-2).join(' '))) {telefone=parts.slice(-2).join(' ');rest=parts.slice(0,-2).join(' ')}
     else if(parts.length && isPhone(parts[parts.length-1])) {telefone=parts.pop();rest=parts.join(' ')}
     else if(parts.slice(-2).join(' ')==='SEM DPC') {telefone='SEM DPC';rest=parts.join(' ')}
-    if(i+1<lines.length && !/^\d+\s+/.test(lines[i+1]) && !/^EQUIPE\s+/i.test(lines[i+1]) && !dateRe.test(lines[i+1]) && !/^(OPERACIONAL|ESCALA|NOME)\b/i.test(lines[i+1]) && !isPhone(lines[i+1]) && lines[i+1].length<30){nome=(nome+' '+lines[i+1]).trim();i++}
+    if(i+1<lines.length && !/^\d+\s+/.test(lines[i+1]) && !/^EQUIPE\s+/i.test(lines[i+1]) && !monthYearRe.test(lines[i+1]) && !/^(OPERACIONAL|ESCALA|NOME|CARGO|MATRÍCULA|LOTAÇÃO|TELEFONE)\b/i.test(lines[i+1]) && !isPhone(lines[i+1]) && lines[i+1].length<30){nome=(nome+' '+lines[i+1]).trim();i++}
     out.push({data:date,dia_semana:weekday,turno,equipe,ordem,nome,cargo,matricula,lotacao:rest.trim(),telefone,arquivo:filename});
   }
   const seen=new Set(); return out.filter(r=>{const k=JSON.stringify(r);if(seen.has(k))return false;seen.add(k);return true});
